@@ -1,3 +1,5 @@
+import numpy as np
+
 class Vocabulary(object):
     """
     A Vocabulary stores a set of words belonging to a particular language. Words in the source vocabulary are mapped
@@ -186,3 +188,38 @@ class Vocabulary(object):
 
     def __hash__(self):
         return hash(self.stoi)
+
+
+def load_embedding_weight(path, vocab, dimension=300):
+    embedding_dict = {}
+    cnt = 0
+    except_cnt = 0
+    total_size = len(vocab.stoi)
+    with open(path, 'r') as f:
+        for idx, line in enumerate(f.readlines()):
+            if line.strip():
+                word = line.strip().split(' ')[0]
+                if word == "PADDING":
+                    word = "__pad__"
+                elif word == "UNK":
+                    word = "__unk__"
+                _embedding = [v for v in line.strip().split(' ')[1:]]
+                embedding = np.array(_embedding)
+                embedding_dict[word] = embedding
+
+    np.random.seed(0)
+    embedding_matrix = np.random.randn(len(vocab.stoi), dimension)
+
+    for k, v in vocab.stoi.items():
+        word_vector = embedding_dict.get(k, None)
+        if word_vector is not None:
+            cnt += 1
+            embedding_matrix[v] = word_vector
+
+
+    pad_index = vocab.stoi['__pad__']
+    embedding_matrix[pad_index] = np.zeros(dimension)
+    print("Loaded word embedding from %s" % path)
+    print("%s / %s" % (cnt, total_size))
+    print("word except :", except_cnt)
+    return embedding_matrix

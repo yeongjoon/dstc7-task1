@@ -3,165 +3,221 @@ import numpy as np
 
 from noesis.dataset.vocabulary import Vocabulary
 from noesis.dataset import utils
+from noesis.dataset.data_augmentation import augmenting_data
+from noesis.dataset.data_augmentation import slice_pairs
+import random
 
+import pickle
 
 class Dataset(object):
-    """
-    A class that encapsulates a dataset.
+	"""
+	A class that encapsulates a dataset.
 
-    Warning:
-        Do not use this constructor directly, use one of the class methods to initialize.
+	Warning:
+		Do not use this constructor directly, use one of the class methods to initialize.
 
-    Note:
-        Source or target sequences that are longer than the respective
-        max length will be filtered.
+	Note:
+		Source or target sequences that are longer than the respective
+		max length will be filtered.
 
-    Args:
-        max_len (int): maximum source sequence length
-    """
+	Args:
+		max_len (int): maximum source sequence length
+	"""
 
-    def __init__(self):
-        # Declare vocabulary objects
-        self.vocab = None
-        self.data = None
+	def __init__(self):
+		# Declare vocabulary objects
+		self.vocab = None
+		self.data = None
 
 
-    @classmethod
-    def from_file(cls, path, vocab=None, max_vocab=50000):
-        """
-        Initialize a dataset from the file at given path. The file
-        must contains a list of TAB-separated pairs of sequences.
+	@classmethod
+	def from_file(cls, path, vocab=None, max_vocab=50000, is_train=False):
+		"""
+		Initialize a dataset from the file at given path. The file
+		must contains a list of TAB-separated pairs of sequences.
 
-        Note:
-            Source or target sequences that are longer than the respective
-            max length will be filtered.
-            As specified by maximum vocabulary size, source and target
-            vocabularies will be sorted in descending token frequency and cutoff.
-            Tokens that are in the dataset but not retained in the vocabulary
-            will be dropped in the sequences.
+		Note:
+			Source or target sequences that are longer than the respective
+			max length will be filtered.
+			As specified by maximum vocabulary size, source and target
+			vocabularies will be sorted in descending token frequency and cutoff.
+			Tokens that are in the dataset but not retained in the vocabulary
+			will be dropped in the sequences.
 
-        Args:
-            path (str): path to the dataset file
-            vocab (Vocabulary): pre-populated Vocabulary object or a path of a file containing words for the source language, default `None`. If a pre-populated Vocabulary object, `src_max_vocab` wouldn't be used.
-            max_vocab (int): maximum source vocabulary size
-        """
-        obj = cls()
-        pairs = utils.prepare_data(path)
-        return cls._encode(obj, pairs, vocab, max_vocab)
+		Args:
+			path (str): path to the dataset file
+			vocab (Vocabulary): pre-populated Vocabulary object or a path of a file containing words for the source language, default `None`. If a pre-populated Vocabulary object, `src_max_vocab` wouldn't be used.
+			max_vocab (int): maximum source vocabulary size
+		"""
+		obj = cls()
+		###########원래 버전
+		#pairs = utils.prepare_data(path, is_train)
+		import pickle
+		token = 'train' if is_train else 'dev'
+		filename = '/home/nlpgpu5/yeongjoon/dstc7-noesis/data/lowercase_pairs_'+ token +'_final.pkl'
+		with open(filename, 'rb') as f:
+			pairs = pickle.load(f)
+		if is_train:
+			pairs = augmenting_data(pairs)
+		pairs = slice_pairs(pairs)
+		return cls._encode(obj, pairs, vocab, max_vocab, is_train)
 
-    def _encode(self, pairs, vocab=None, max_vocab=500000):
-        """
-        Encodes the source and target lists of sequences using source and target vocabularies.
 
-        Note:
-            Source or target sequences that are longer than the respective
-            max length will be filtered.
-            As specified by maximum vocabulary size, source and target
-            vocabularies will be sorted in descending token frequency and cutoff.
-            Tokens that are in the dataset but not retained in the vocabulary
-            will be dropped in the sequences.
+		##########보성 누나 데이터 버전
+		#pairs = utils.prepare_bosung_data(path)
+		#return cls._bosung_encode(obj, pairs, vocab, max_vocab, is_train)
 
-        Args:
-            pairs (list): list of tuples (source sequences, target sequence)
-            vocab (Vocabulary): pre-populated Vocabulary object or a path of a file containing words for the source language,
-            default `None`. If a pre-populated Vocabulary object, `src_max_vocab` wouldn't be used.
-            max_vocab (int): maximum source vocabulary size
-        """
-        # Read in vocabularies
-        self.vocab = self._init_vocab(pairs, max_vocab, vocab)
 
-        # Translate input sequences to token ids
-        self.data = []
-        for (context, candidates), target in pairs:
-            c = self.vocab.indices_from_sequence(context)
-            r = []
-            for candidate in candidates:
-                r.append(self.vocab.indices_from_sequence(candidate))
-            self.data.append(((c, r), target))
-        return self
+	def _bosung_encode(self, pairs, vocab=None, max_vocab=30000, train=True, response_num=4):
+		self.vocab = self._bosung_init_vocab(pairs, max_vocab, vocab)
+		self.data = []
+		for (context, response), target in pairs:
+			c = self.vocab.indices_from_sequence(context)
+			r = self.vocab.indices_from_sequence(response)
+			self.data.append(((c, r), target))
+		return self
 
-    def _init_vocab(self, data, max_num_vocab, vocab):
-        resp_vocab = Vocabulary(max_num_vocab)
-        if vocab is None:
-            for (context, candidates), target in data:
-                resp_vocab.add_sequence(context)
-                for candidate in candidates:
-                    resp_vocab.add_sequence(candidate)
-            resp_vocab.trim()
-        elif isinstance(vocab, Vocabulary):
-            resp_vocab = vocab
-        elif isinstance(vocab, str):
-            for tok in utils.read_vocabulary(vocab, max_num_vocab):
-                resp_vocab.add_token(tok)
-        else:
-            raise AttributeError('{} is not a valid instance on a vocabulary. None, instance of Vocabulary class \
-                                 and str are only supported formats for the vocabulary'.format(vocab))
-        return resp_vocab
+	def _encode(self, pairs, vocab=None, max_vocab=500000, is_train=True, response_num=4):
+		"""
+		Encodes the source and target lists of sequences using source and target vocabularies.
 
-    def _pad(self, data):
-        c = [pair[0][0] for pair in data]
-        r = [pair[0][1] for pair in data]
-        context = np.zeros([len(c), max([len(entry) for entry in c])], dtype=int)
-        context.fill(self.vocab.PAD_token_id)
-        context_lengths = np.zeros(len(c), dtype=int)
+		Note:
+			Source or target sequences that are longer than the respective
+			max length will be filtered.
+			As specified by maximum vocabulary size, source and target
+			vocabularies will be sorted in descending token frequency and cutoff.
+			Tokens that are in the dataset but not retained in the vocabulary
+			will be dropped in the sequences.
 
-        for i, entry in enumerate(c):
-            context[i, :len(entry)] = entry
-            context_lengths[i] = len(entry)
+		Args:
+			pairs (list): list of tuples (source sequences, target sequence)
+			vocab (Vocabulary): pre-populated Vocabulary object or a path of a file containing words for the source language,
+			default `None`. If a pre-populated Vocabulary object, `src_max_vocab` wouldn't be used.
+			max_vocab (int): maximum source vocabulary size
+		"""
+		# Read in vocabularies
+		self.vocab = self._init_vocab(pairs, max_vocab, vocab)
 
-        responses = np.zeros([len(r), max([len(entry) for entry in r]), max([len(cand) for entry in r for cand in entry])], dtype=int)
-        responses.fill(self.vocab.PAD_token_id)
-        responses_lengths = np.zeros([len(r), max([len(entry) for entry in r])], dtype=int)
+		# Translate input sequences to token ids
+		# for (context, candidates), target in pairs:
+		#     c = self.vocab.indices_from_sequence(context)
+		#     r = []
+		#     for candidate in candidates:
+		#         r.append(self.vocab.indices_from_sequence(candidate))
+		#     self.data.append(((c, r), target))
 
-        for i, entry in enumerate(r):
-            for j, cand in enumerate(entry):
-                responses[i, j, :len(cand)] = cand
-                responses_lengths[i, j] = len(cand)
+		self.data = []
 
-        return context, responses, context_lengths, responses_lengths
+		for (context, candidates), target in pairs:
+			c = self.vocab.indices_from_sequence(context)
+			a = self.vocab.indices_from_sequence(candidates[target])
+			self.data.append(((c, a), 1))                                               #1 is True 0 is False
+			del candidates[target]
+			for candidate in candidates:
+				self.data.append(((c, self.vocab.indices_from_sequence(candidate)), 0))
+		if is_train is True:
+			self.data.sort(key=lambda s: len(s[0][0]), reverse=True)
 
-    def __len__(self):
-        return len(self.data)
+		return self
 
-    def num_batches(self, batch_size):
-        """
-        Get the number of batches given batch size.
+	def _bosung_init_vocab(selfs, data, max_num_vocab, vocab):
+		resp_vocab = Vocabulary(max_num_vocab)
+		if vocab is None:
+			for (context, response), target in data:
+				resp_vocab.add_sequence(context)
+				resp_vocab.add_sequence(response)
+			resp_vocab.trim()
+		elif isinstance(vocab, Vocabulary):
+			resp_vocab = vocab
+		elif isinstance(vocab, str):
+			for tok in utils.read_vocabulary(vocab, max_num_vocab):
+				resp_vocab.add_token(tok)
+		else:
+			raise AttributeError('{} is not a valid instance on a vocabulary. None, instance of Vocabulary class \
+								 and str are only supported formats for the vocabulary'.format(vocab))
+		return resp_vocab
 
-        Args:
-            batch_size (int): number of examples in a batch
+	def _init_vocab(self, data, max_num_vocab, vocab):
+		resp_vocab = Vocabulary(max_num_vocab)
+		if vocab is None:
+			for (context, candidates), target in data:
+				resp_vocab.add_sequence(context)
+				for candidate in candidates:
+					resp_vocab.add_sequence(candidate)
+			resp_vocab.trim()
+		elif isinstance(vocab, Vocabulary):
+			resp_vocab = vocab
+		elif isinstance(vocab, str):
+			for tok in utils.read_vocabulary(vocab, max_num_vocab):
+				resp_vocab.add_token(tok)
+		else:
+			raise AttributeError('{} is not a valid instance on a vocabulary. None, instance of Vocabulary class \
+								 and str are only supported formats for the vocabulary'.format(vocab))
+		return resp_vocab
 
-        Returns:
-            (int) : number of batches
-        """
-        return len(range(0, len(self.data), batch_size))
+	def _pad(self, data):
+		c = [pair[0][0] for pair in data]
+		r = [pair[0][1] for pair in data]
+		context = np.zeros([len(c), max([len(entry) for entry in c])], dtype=int)
+		context.fill(self.vocab.PAD_token_id)
+		context_lengths = np.zeros(len(c), dtype=int)
 
-    def make_batches(self, batch_size):
-        """
-        Create a generator that generates batches in batch_size over data.
+		for i, entry in enumerate(c):
+			context[i, :len(entry)] = entry
+			context_lengths[i] = len(entry)
 
-        Args:
-            batch_size (int): number of pairs in a mini-batch
+		responses = np.zeros([len(r), max([len(entry) for entry in r])], dtype=int)
+		responses.fill(self.vocab.PAD_token_id)
+		responses_lengths = np.zeros(len(r), dtype=int)
 
-        Yields:
-            (list (str), list (str)): next pair of source and target variable in a batch
-        """
-        if len(self.data) < batch_size:
-            raise OverflowError("batch size = {} cannot be larger than data size = {}".
-                                format(batch_size, len(self.data)))
-        for i in range(0, len(self.data), batch_size):
-            cur_batch = self.data[i:i + batch_size]
-            context, responses, context_lengths, responses_lengths = self._pad(cur_batch)
-            target = np.asarray([pair[1] for pair in cur_batch])
+		for i, entry in enumerate(r):
+			responses[i, :len(entry)] = entry
+			responses_lengths[i] = len(entry)
 
-            yield (context, responses, target, context_lengths, responses_lengths)
+		return context, responses, context_lengths, responses_lengths
 
-    def shuffle(self, seed=None):
-        """
-        Shuffle the data.
+	def __len__(self):
+		return len(self.data)
 
-        Args:
-            seed (int): provide a value for the random seed; default seed=None is truly random
-        """
-        if seed is not None:
-            random.seed(seed)
-        random.shuffle(self.data)
+	def num_batches(self, batch_size):
+		"""
+		Get the number of batches given batch size.
+
+		Args:
+			batch_size (int): number of examples in a batch
+
+		Returns:
+			(int) : number of batches
+		"""
+		return len(range(0, len(self.data), batch_size))
+
+	def make_batches(self, batch_size):
+		"""
+		Create a generator that generates batches in batch_size over data.
+
+		Args:
+			batch_size (int): number of pairs in a mini-batch
+
+		Yields:
+			(list (str), list (str)): next pair of source and target variable in a batch
+		"""
+		if len(self.data) < batch_size:
+			raise OverflowError("batch size = {} cannot be larger than data size = {}".
+								format(batch_size, len(self.data)))
+		for i in range(0, len(self.data), batch_size):
+			cur_batch = self.data[i:i + batch_size]
+			context, responses, context_lengths, responses_lengths = self._pad(cur_batch)
+			target = np.asarray([[pair[1]] for pair in cur_batch])
+
+			yield (context, responses, target, context_lengths, responses_lengths)
+
+	def shuffle(self, seed=None):
+		"""
+		Shuffle the data.
+
+		Args:
+			seed (int): provide a value for the random seed; default seed=None is truly random
+		"""
+		if seed is not None:
+			random.seed(seed)
+		random.shuffle(self.data)

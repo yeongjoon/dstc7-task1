@@ -2,6 +2,12 @@ import logging
 import ijson
 from tqdm import tqdm
 import numpy as np
+import spacy
+from spacy.attrs import ORTH, LEMMA
+from noesis.dataset.data_augmentation import tokenize_string
+from noesis.dataset.data_augmentation import augmenting_data
+
+import pickle
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +31,7 @@ def read_json(input_file):
     return json_objects_lst
 
 
-def prepare_data(path, tokenize_func=space_tokenize, format='JSON'):
+def prepare_data(path, is_train, tokenize_func=space_tokenize, format='JSON'):
     """
     Reads a tab-separated data file where each line contains a source sentence and a target sentence. Pairs containing
     a sentence that exceeds the maximum length allowed for its language are not added.
@@ -42,7 +48,7 @@ def prepare_data(path, tokenize_func=space_tokenize, format='JSON'):
     pairs = []
     with open(path, 'r') as fin:
         if format == 'JSON':
-            pairs = process(read_json(fin), tokenize_func)
+            pairs = process(read_json(fin), tokenize_func, is_train)
         elif format == 'CSV':
             pairs = read(fin, ",", tokenize_func)
         elif format == 'TSV':
@@ -80,9 +86,12 @@ def read(fin, delimiter, tokenize_func):
     return pairs
 
 
-def process(records, tokenize_func):
+def process(records, tokenize_func, is_train=False):
     pairs = []
-    for record in records:
+    nlp = spacy.load('en_core_web_sm', disable=["tagger", "ner"])
+    nlp.tokenizer.add_special_case(u'__eou__', [{ORTH: u'__eou__'}])
+    nlp.tokenizer.add_special_case(u'__eot__', [{ORTH: u'__eot__'}])
+    for record in tqdm(records[:25000]):
         context = ""
         speaker = None
         for msg in record['messages-so-far']:
@@ -96,6 +105,8 @@ def process(records, tokenize_func):
                 context += msg['utterance'] + " __eou__ "
 
         context += "__eot__"
+        #print(context)
+        context = [str(tok) for tok in nlp(context.lower())]
 
         # Create the next utterance options and the target label
         candidates = []
@@ -105,7 +116,8 @@ def process(records, tokenize_func):
         for i, candidate in enumerate(record['options-for-next']):
             if candidate['candidate-id'] == target_id:
                 tgt = i
-            candidates.append(tokenize_func(candidate['utterance']))
+            candidates.append([str(tok) for tok in nlp(candidate['utterance'].lower())])
+            #candidates.append(tokenize_func(candidate['utterance'])[:30])
 
         if tgt is None:
             logger.info(
@@ -113,8 +125,17 @@ def process(records, tokenize_func):
                     record['example-id']))
             tgt = 0
         else:
-            pairs.append(((tokenize_func(context), candidates), tgt))
+            pairs.append(((context, candidates), tgt))
 
+    file_token = 'train' if is_train else 'dev'
+    filename = '/home/nlpgpu5/yeongjoon/dstc7-noesis/data/lowercase_pairs_' + file_token + '_final.pkl'
+    print(filename)
+    with open(filename, 'wb') as f:
+        pickle.dump(pairs, f)
+    import sys
+    sys.exit(1)
+    if is_train is True:
+        pairs = augmenting_data(pairs)
     return pairs
 
 
@@ -142,3 +163,18 @@ def read_vocabulary(path, max_num_vocab=50000):
 
     logger.info("Size of Vocabulary: %s" % len(vocab))
     return vocab
+
+def prepare_bosung_data(path):
+    pairs = []
+    nlp = spacy.load('en_core_web_sm')
+    nlp.tokenizer.add_special_case(u'__eou__', [{ORTH: u'__eou__'}])
+    nlp.tokenizer.add_special_case(u'__eot__', [{ORTH: u'__eot__'}])
+    for line in tqdm(open(path, 'r').readlines()):
+        if line.split('\t')[0] == 'index':
+            continue
+        context = tokenize_string(nlp, line.split('\t')[1])
+        response = tokenize_string(nlp, line.split('\t')[2])
+        target = 1 if line.split('\t')[3].strip() == 'entailment' else 0
+        pairs.append(((space_tokenize(context)[-50:], space_tokenize(response)[:50]), target))
+
+    return pairs
